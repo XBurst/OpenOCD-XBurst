@@ -621,17 +621,18 @@ static int mips32_pracc_synchronize_cache(struct mips_ejtag *ejtag_info,
 
 	/** Find cache line size in bytes */
 	uint32_t clsiz;
-	if (rel) {	/* Release 2 (rel = 1) */
-		pracc_add(&ctx, 0, MIPS32_LUI(15, PRACC_UPPER_BASE_ADDR));			/* $15 = MIPS32_PRACC_BASE_ADDR */
+	/* Ingenic XBurst1 does not support RDHWR, so we can not use it get CACHE_LINE_SIZE */
+	if (rel && (ejtag_info->core_type != MIPS_INGENIC_XBURST1)) {	/* Release 2 (rel = 1) */
+		pracc_add(&ctx, 0, MIPS32_LUI(15, PRACC_UPPER_BASE_ADDR));	/* $15 = MIPS32_PRACC_BASE_ADDR */
 
-		pracc_add(&ctx, 0, MIPS32_RDHWR(8, MIPS32_SYNCI_STEP));			/* load synci_step value to $8 */
+		pracc_add(&ctx, 0, MIPS32_RDHWR(8, MIPS32_SYNCI_STEP));		/* load synci_step value to $8 */
 
 		pracc_add(&ctx, MIPS32_PRACC_PARAM_OUT,
-				MIPS32_SW(8, PRACC_OUT_OFFSET, 15));			/* store $8 to pracc_out */
+				MIPS32_SW(8, PRACC_OUT_OFFSET, 15));				/* store $8 to pracc_out */
 
 		pracc_add_li32(&ctx, 8, ejtag_info->reg8, 0);				/* restore $8 */
 
-		pracc_add(&ctx, 0, MIPS32_B(NEG16(ctx.code_count + 1)));					/* jump to start */
+		pracc_add(&ctx, 0, MIPS32_B(NEG16(ctx.code_count + 1)));	/* jump to start */
 		pracc_add(&ctx, 0, MIPS32_MFC0(15, 31, 0));					/* move COP0 DeSave to $15 */
 
 		ctx.retval = mips32_pracc_queue_exec(ejtag_info, &ctx, &clsiz);
