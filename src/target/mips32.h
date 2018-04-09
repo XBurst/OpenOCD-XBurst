@@ -29,7 +29,17 @@
 
 #define MIPS32_COMMON_MAGIC		0xB320B320
 
-/**
+/* Cache flush type*/
+
+#define INSTNOWB		0
+#define DATA			1
+#define DATANOWB		2
+#define L2				3
+#define L2NOWB			4
+#define ALL				5
+#define ALLNOWB			6
+
+/*
  * Memory segments (32bit kernel mode addresses)
  * These are the traditional names used in the 32-bit universe.
  */
@@ -39,10 +49,10 @@
 #define KSEG2			0xc0000000
 #define KSEG3			0xe0000000
 
-/** Returns the kernel segment base of a given address */
+/* Returns the kernel segment base of a given address */
 #define KSEGX(a)		((a) & 0xe0000000)
 
-/** CP0 CONFIG regites fields */
+/* CP0 CONFIG0 regites fields */
 #define MIPS32_CONFIG0_KU_SHIFT 25
 #define MIPS32_CONFIG0_KU_MASK (0x7 << MIPS32_CONFIG0_KU_SHIFT)
 
@@ -55,8 +65,34 @@
 #define MIPS32_CONFIG0_AR_SHIFT 10
 #define MIPS32_CONFIG0_AR_MASK (0x7 << MIPS32_CONFIG0_AR_SHIFT)
 
+/* CP0 CONFIG1 regites fields */
+#define MIPS32_CONFIG1_IS_SHIFT 22
+#define MIPS32_CONFIG1_IS_MASK (0x7 << MIPS32_CONFIG1_IS_SHIFT)
+
+#define MIPS32_CONFIG1_IL_SHIFT 19
+#define MIPS32_CONFIG1_IL_MASK (0x7 << MIPS32_CONFIG1_IL_SHIFT)
+
+#define MIPS32_CONFIG1_IA_SHIFT 16
+#define MIPS32_CONFIG1_IA_MASK (0x7 << MIPS32_CONFIG1_IA_SHIFT)
+
+#define MIPS32_CONFIG1_DS_SHIFT 13
+#define MIPS32_CONFIG1_DS_MASK (0x7 << MIPS32_CONFIG1_DS_SHIFT)
+
 #define MIPS32_CONFIG1_DL_SHIFT 10
 #define MIPS32_CONFIG1_DL_MASK (0x7 << MIPS32_CONFIG1_DL_SHIFT)
+
+#define MIPS32_CONFIG1_DA_SHIFT 7
+#define MIPS32_CONFIG1_DA_MASK (0x7 << MIPS32_CONFIG1_DA_SHIFT)
+
+/* CP0 CONFIG2 regites fields */
+#define MIPS32_CONFIG2_SS_SHIFT 8
+#define MIPS32_CONFIG2_SS_MASK (0xf << MIPS32_CONFIG1_SS_SHIFT)
+
+#define MIPS32_CONFIG2_SL_SHIFT 4
+#define MIPS32_CONFIG2_SL_MASK (0xf << MIPS32_CONFIG1_SL_SHIFT)
+
+#define MIPS32_CONFIG2_SA_SHIFT 0
+#define MIPS32_CONFIG2_SA_MASK (0xf << MIPS32_CONFIG1_SA_SHIFT)
 
 #define MIPS32_ARCH_REL1 0x0
 #define MIPS32_ARCH_REL2 0x1
@@ -132,7 +168,8 @@ struct mips32_algorithm {
 	enum mips32_isa_mode isa_mode;
 };
 
-#define MIPS32_OP_ADDIU 0x21
+#define MIPS32_OP_ADDU	0x21
+#define MIPS32_OP_ADDIU	0x09
 #define MIPS32_OP_ANDI	0x0C
 #define MIPS32_OP_BEQ	0x04
 #define MIPS32_OP_BGTZ	0x07
@@ -141,7 +178,7 @@ struct mips32_algorithm {
 #define MIPS32_OP_AND	0x24
 #define MIPS32_OP_CACHE	0x2F
 #define MIPS32_OP_COP0	0x10
-#define MIPS32_OP_J	0x02
+#define MIPS32_OP_J		0x02
 #define MIPS32_OP_JR	0x08
 #define MIPS32_OP_LUI	0x0F
 #define MIPS32_OP_LW	0x23
@@ -151,6 +188,7 @@ struct mips32_algorithm {
 #define MIPS32_OP_MTHI	0x11
 #define MIPS32_OP_MFLO	0x12
 #define MIPS32_OP_MTLO	0x13
+#define MIPS32_OP_MUL   0x02
 #define MIPS32_OP_RDHWR 0x3B
 #define MIPS32_OP_SB	0x28
 #define MIPS32_OP_SH	0x29
@@ -159,6 +197,7 @@ struct mips32_algorithm {
 #define MIPS32_OP_XORI	0x0E
 #define MIPS32_OP_XOR	0x26
 #define MIPS32_OP_SLTU  0x2B
+#define MIPS32_OP_SLLV  0x04
 #define MIPS32_OP_SRL	0x03
 #define MIPS32_OP_SYNCI	0x1F
 
@@ -179,7 +218,8 @@ struct mips32_algorithm {
 
 #define MIPS32_NOP						0
 #define MIPS32_ADDI(tar, src, val)		MIPS32_I_INST(MIPS32_OP_ADDI, src, tar, val)
-#define MIPS32_ADDU(dst, src, tar)		MIPS32_R_INST(MIPS32_OP_SPECIAL, src, tar, dst, 0, MIPS32_OP_ADDIU)
+#define MIPS32_ADDIU(tar, src, val)		MIPS32_I_INST(MIPS32_OP_ADDIU, src, tar, val)
+#define MIPS32_ADDU(dst, src, tar)		MIPS32_R_INST(MIPS32_OP_SPECIAL, src, tar, dst, 0, MIPS32_OP_ADDU)
 #define MIPS32_AND(reg, off, val)		MIPS32_R_INST(0, off, val, reg, 0, MIPS32_OP_AND)
 #define MIPS32_ANDI(tar, src, val)		MIPS32_I_INST(MIPS32_OP_ANDI, src, tar, val)
 #define MIPS32_B(off)					MIPS32_BEQ(0, 0, off)
@@ -187,7 +227,7 @@ struct mips32_algorithm {
 #define MIPS32_BGTZ(reg, off)			MIPS32_I_INST(MIPS32_OP_BGTZ, reg, 0, off)
 #define MIPS32_BNE(src, tar, off)		MIPS32_I_INST(MIPS32_OP_BNE, src, tar, off)
 #define MIPS32_CACHE(op, off, base)		MIPS32_I_INST(MIPS32_OP_CACHE, base, op, off)
-#define MIPS32_J(tar)				MIPS32_J_INST(MIPS32_OP_J, tar)
+#define MIPS32_J(tar)					MIPS32_J_INST(MIPS32_OP_J, tar)
 #define MIPS32_JR(reg)					MIPS32_R_INST(0, reg, 0, 0, 0, MIPS32_OP_JR)
 #define MIPS32_MFC0(gpr, cpr, sel)		MIPS32_R_INST(MIPS32_OP_COP0, MIPS32_COP0_MF, gpr, cpr, 0, sel)
 #define MIPS32_MTC0(gpr, cpr, sel)		MIPS32_R_INST(MIPS32_OP_COP0, MIPS32_COP0_MT, gpr, cpr, 0, sel)
@@ -199,6 +239,7 @@ struct mips32_algorithm {
 #define MIPS32_MFHI(reg)				MIPS32_R_INST(0, 0, 0, reg, 0, MIPS32_OP_MFHI)
 #define MIPS32_MTLO(reg)				MIPS32_R_INST(0, reg, 0, 0, 0, MIPS32_OP_MTLO)
 #define MIPS32_MTHI(reg)				MIPS32_R_INST(0, reg, 0, 0, 0, MIPS32_OP_MTHI)
+#define MIPS32_MUL(dst, src, t)			MIPS32_R_INST(28, src, t, dst, 0, MIPS32_OP_MUL)
 #define MIPS32_ORI(tar, src, val)		MIPS32_I_INST(MIPS32_OP_ORI, src, tar, val)
 #define MIPS32_XORI(tar, src, val)		MIPS32_I_INST(MIPS32_OP_XORI, src, tar, val)
 #define MIPS32_RDHWR(tar, dst)			MIPS32_R_INST(MIPS32_OP_SPECIAL3, 0, tar, dst, 0, MIPS32_OP_RDHWR)
@@ -208,6 +249,7 @@ struct mips32_algorithm {
 #define MIPS32_XOR(reg, val1, val2)		MIPS32_R_INST(0, val1, val2, reg, 0, MIPS32_OP_XOR)
 #define MIPS32_SRL(reg, src, off)		MIPS32_R_INST(0, 0, src, reg, off, MIPS32_OP_SRL)
 #define MIPS32_SLTU(dst, src, tar)		MIPS32_R_INST(MIPS32_OP_SPECIAL, src, tar, dst, 0, MIPS32_OP_SLTU)
+#define MIPS32_SLLV(dst, tar, src)		MIPS32_R_INST(MIPS32_OP_SPECIAL, src, tar, dst, 0, MIPS32_OP_SLLV)
 #define MIPS32_SYNCI(off, base)			MIPS32_I_INST(MIPS32_OP_REGIMM, base, MIPS32_OP_SYNCI, off)
 
 #define MIPS32_SYNC			0xF
@@ -219,8 +261,13 @@ struct mips32_algorithm {
  * 1) bits 1..0 hold cache type
  * 2) bits 4..2 hold operation code
  */
-#define MIPS32_CACHE_D_HIT_WRITEBACK ((0x1 << 0) | (0x6 << 2))
-#define MIPS32_CACHE_I_HIT_INVALIDATE ((0x0 << 0) | (0x4 << 2))
+#define MIPS32_CACHE_D_HIT_WRITEBACK 		((0x1 << 0) | (0x6 << 2))
+#define MIPS32_CACHE_I_HIT_INVALIDATE		((0x0 << 0) | (0x4 << 2))
+#define MIPS32_CACHE_S_INDEX_STORE_TAG		((0x3 << 0) | (0x2 << 2))
+#define MIPS32_CACHE_D_INDEX_STORE_TAG		((0x1 << 0) | (0x2 << 2))
+#define MIPS32_CACHE_I_INDEX_STORE_TAG		((0x0 << 0) | (0x2 << 2))
+#define MIPS32_CACHE_S_INDEX_WRITEBACK_INV	((0x3 << 0) | (0x0 << 2))
+#define MIPS32_CACHE_D_INDEX_WRITEBACK_INV	((0x1 << 0) | (0x0 << 2))
 
 /* ejtag specific instructions */
 #define MIPS32_DRET					0x4200001F

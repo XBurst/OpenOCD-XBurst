@@ -165,6 +165,19 @@ static const struct {
 
 static uint8_t mips32_gdb_dummy_fp_value[] = {0, 0, 0, 0};
 
+static const struct {
+	unsigned option;
+	const char *arg;
+} invalidate_cmd[7] = {
+	{ INSTNOWB, "instnowb", },
+	{ DATA, "data", },
+	{ DATANOWB, "datanowb", },
+	{ L2, "l2", },
+	{ L2NOWB, "l2nowb", },
+	{ ALL, "all", },
+	{ ALLNOWB, "allnowb", },
+};
+
 static int mips32_get_core_reg(struct reg *reg)
 {
 	int retval;
@@ -975,6 +988,98 @@ COMMAND_HANDLER(mips32_handle_scan_delay_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(mips32_handle_invalidate_cache_command)
+{
+	int retval = -1;
+	struct target *target = get_current_target(CMD_CTX);
+	struct mips32_common *mips32 = target_to_mips32(target);
+	struct mips_ejtag *ejtag_info = &mips32->ejtag_info;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_WARNING("target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	if ((CMD_ARGC >= 2) || (CMD_ARGC == 0)){
+		LOG_DEBUG("ERROR_COMMAND_SYNTAX_ERROR");
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	if (CMD_ARGC == 1) {
+		for (int i = 0; i < 7 ; i++) {
+			if (strcmp(CMD_ARGV[0], invalidate_cmd[i].arg) == 0) {
+				switch (invalidate_cmd[i].option) {
+					case INSTNOWB:
+						LOG_INFO("Clearing L1 instr cache, no writeback");
+						retval = mips32_pracc_invalidate_cache(target, ejtag_info, INSTNOWB);
+						break;
+					case DATA:
+						LOG_INFO("Clearing L1 data cache, writeback");
+						retval = mips32_pracc_invalidate_cache(target, ejtag_info, DATA);
+						break;
+					case DATANOWB:
+						LOG_INFO("Clearing L1 data cache, no writeback");
+						mips32_pracc_invalidate_cache(target, ejtag_info, DATANOWB);
+						break;
+					case L2:
+						if (ejtag_info->core_type == MIPS_INGENIC_XBURST1) {
+							LOG_DEBUG("Ingenic XBurst1 does not support clear L2 cache alone");
+							return ERROR_FAIL;
+						} else {
+							LOG_INFO("Clearing L2 cache, writeback");
+							mips32_pracc_invalidate_cache(target, ejtag_info, L2);
+						}
+						break;
+					case L2NOWB:
+						if (ejtag_info->core_type == MIPS_INGENIC_XBURST1) {
+							LOG_DEBUG("Ingenic XBurst1 does not support clear L2 cache alone");
+							return ERROR_FAIL;
+						} else {
+							LOG_INFO("Clearing L2 cache, no writeback");
+							mips32_pracc_invalidate_cache(target, ejtag_info, L2NOWB);
+						}
+						break;
+					case ALL:
+						LOG_INFO("Clearing L1 instr cache, no writeback");
+						mips32_pracc_invalidate_cache(target, ejtag_info, INSTNOWB);
+
+						LOG_INFO("Clearing L1 data cache, writeback");
+						mips32_pracc_invalidate_cache(target, ejtag_info, DATA);
+
+						if (ejtag_info->core_type != MIPS_INGENIC_XBURST1) {
+							LOG_INFO("Clearing L2 cache, writeback");
+							mips32_pracc_invalidate_cache(target, ejtag_info, L2);
+						}
+						break;
+					case ALLNOWB:
+						LOG_INFO("Clearing L1 instr cache, no writeback");
+						mips32_pracc_invalidate_cache(target, ejtag_info, INSTNOWB);
+
+						LOG_INFO("Clearing L1 data cache, no writeback");
+						mips32_pracc_invalidate_cache(target, ejtag_info, DATANOWB);
+
+						if (ejtag_info->core_type != MIPS_INGENIC_XBURST1) {
+							LOG_INFO("Clearing L2 cache, no writeback");
+							mips32_pracc_invalidate_cache(target, ejtag_info, L2NOWB);
+						}
+						break;
+					default:
+						LOG_ERROR("Invalid command argument '%s' not found", CMD_ARGV[0]);
+						return ERROR_COMMAND_SYNTAX_ERROR;
+						break;
+				}
+
+				if (retval == ERROR_FAIL)
+					return ERROR_FAIL;
+				else
+					break;
+			}
+		}
+	}
+
+	return ERROR_OK;
+}
+
 static const struct command_registration mips32_exec_command_handlers[] = {
 	{
 		.name = "cp0",
@@ -983,12 +1088,19 @@ static const struct command_registration mips32_exec_command_handlers[] = {
 		.usage = "regnum select [value]",
 		.help = "display/modify cp0 register",
 	},
-		{
+	{
 		.name = "scan_delay",
 		.handler = mips32_handle_scan_delay_command,
 		.mode = COMMAND_ANY,
 		.help = "display/set scan delay in nano seconds",
 		.usage = "[value]",
+	},
+	{
+		.name = "invalidate",
+		.handler = mips32_handle_invalidate_cache_command,
+		.mode = COMMAND_EXEC,
+		.help = "Invalidate either or both the instruction and data caches.",
+		.usage = "instnowb|data|datanowb|l2|l2nowb|all|allnowb",
 	},
 	COMMAND_REGISTRATION_DONE
 };
