@@ -194,6 +194,7 @@ struct mips_ejtag {
 	uint32_t pa_ctrl;
 	uint32_t pa_addr;
 	unsigned int ejtag_version;
+	uint32_t core_type;
 
 	/* Memory-Mapped Registers. This addresses are not same on different
 	 * EJTAG versions. */

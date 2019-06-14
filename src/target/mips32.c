@@ -390,6 +390,53 @@ int mips32_init_arch_info(struct target *target, struct mips32_common *mips32, s
 	return ERROR_OK;
 }
 
+int mips32_detect_core_imp(struct target *target)
+{
+	struct mips32_common *mips32 = target_to_mips32(target);
+	struct mips_ejtag *ejtag_info = &mips32->ejtag_info;
+	uint32_t prid;
+	int retval;
+
+	/* Read PRID registers and determine CPU type from PRID. */
+	retval = mips32_cp0_read(ejtag_info, &prid, 15, 0);
+	if (retval != ERROR_OK) {
+		LOG_DEBUG("READ of PRID Failed");
+		return retval;
+	} else {
+		/* Ingenic cores */
+		if (((prid >> 16) & 0xf0) == 0xd0) {
+			ejtag_info->core_type = MIPS_INGENIC_XBURST1;
+			goto exit;
+		}
+		if (((prid >> 16) & 0xff) == 0x13) {
+			switch ((prid >> 13) & 0x7) {
+				case 0:
+					ejtag_info->core_type = MIPS_INGENIC_XBURST1;
+					break;
+				case 1:
+					ejtag_info->core_type = MIPS_INGENIC_XBURST2;
+					break;
+				default:
+					ejtag_info->core_type = MIPS_INGENIC_XBURST2;
+					LOG_DEBUG("An unrecognized Ingenic CPU type, default is XBurst2.");
+					break;
+			} /* end of switch */
+			goto exit;
+		}
+		/* MIPS Technologies cores */
+		switch ((prid >> 8) & 0xff) {
+			case 0x87:
+				ejtag_info->core_type = MIPS_MTI_M4K;
+				break;
+			default:
+				ejtag_info->core_type = CORE_TYPE_UNKNOWN;
+				break;
+		} /* end of switch */
+	}
+exit:
+	return ERROR_OK;
+}
+
 /* run to exit point. return error if exit point was not reached. */
 static int mips32_run_and_wait(struct target *target, uint32_t entry_point,
 		int timeout_ms, uint32_t exit_point, struct mips32_common *mips32)
