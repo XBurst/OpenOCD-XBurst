@@ -125,9 +125,10 @@ static int mips32_pracc_finish(struct mips_ejtag *ejtag_info)
 int mips32_pracc_clean_text_jump(struct mips_ejtag *ejtag_info)
 {
 	uint32_t jt_code = MIPS32_J((0x0FFFFFFF & MIPS32_PRACC_TEXT) >> 2);
+	uint32_t data;
 
 	/* do 3 0/nops to clean pipeline before a jump to pracc text, NOP in delay slot */
-	for (int i = 0; i != 5; i++) {
+	for (int i = 0; i < 128; i++) {
 		/* Wait for pracc */
 		int retval = wait_for_pracc_rw(ejtag_info);
 		if (retval != ERROR_OK)
@@ -135,34 +136,26 @@ int mips32_pracc_clean_text_jump(struct mips_ejtag *ejtag_info)
 
 		/* Data or instruction out */
 		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
-		uint32_t data = (i == 3) ? jt_code : MIPS32_NOP;
+		if (i < 3)
+			data = MIPS32_NOP;
+		else if (i % 2)
+			data = jt_code;
+		else
+			data = MIPS32_NOP;
 		mips_ejtag_drscan_32_out(ejtag_info, data);
 
 		/* finish pa */
 		retval = mips32_pracc_finish(ejtag_info);
 		if (retval != ERROR_OK)
 			return retval;
+
+		mips32_pracc_read_ctrl_addr(ejtag_info);
+		if (ejtag_info->pa_addr == MIPS32_PRACC_TEXT)
+			return ERROR_OK;
 	}
 
-	if (ejtag_info->mode != 0)	/* async mode support only for MIPS ... */
-		return ERROR_OK;
-
-	for (int i = 0; i != 2; i++) {
-		int retval = mips32_pracc_read_ctrl_addr(ejtag_info);
-		if (retval != ERROR_OK)
-			return retval;
-
-		if (ejtag_info->pa_addr != MIPS32_PRACC_TEXT) {		/* LEXRA/BMIPS ?, shift out another NOP, max 2 */
-			mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
-			mips_ejtag_drscan_32_out(ejtag_info, MIPS32_NOP);
-			retval = mips32_pracc_finish(ejtag_info);
-			if (retval != ERROR_OK)
-				return retval;
-		} else
-			break;
-	}
-
-	return ERROR_OK;
+	LOG_DEBUG("Can not back to MIPS32_PRACC_TEXT");
+	return ERROR_FAIL;
 }
 
 int mips32_pracc_exec(struct mips_ejtag *ejtag_info, struct pracc_queue_info *ctx, uint32_t *param_out)
