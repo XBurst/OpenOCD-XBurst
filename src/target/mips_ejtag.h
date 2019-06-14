@@ -195,6 +195,8 @@ struct mips_ejtag {
 	uint32_t pa_addr;
 	unsigned int ejtag_version;
 	uint32_t core_type;
+	uint32_t config_regs;	/* number of config registers read */
+	uint32_t config[4];		/* cp0 config to config3 */
 
 	/* Memory-Mapped Registers. This addresses are not same on different
 	 * EJTAG versions. */

@@ -1094,6 +1094,7 @@ static int mips_m4k_init_arch_info(struct target *target,
 	/* initialize mips4k specific info */
 	mips32_init_arch_info(target, mips32, tap);
 	mips32->arch_info = mips_m4k;
+	mips32->fp_imp = FP_NOT_IMP;
 
 	return ERROR_OK;
 }
