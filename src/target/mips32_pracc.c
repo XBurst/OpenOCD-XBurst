@@ -1118,6 +1118,10 @@ int mips32_pracc_read_regs(struct mips_ejtag *ejtag_info, uint32_t *regs)
 int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_area *source,
 		int write_t, uint32_t addr, int count, uint32_t *buf)
 {
+	int retval;
+	uint32_t val;
+	uint32_t req_ctrl;
+	uint32_t *ack_ctrl = NULL;
 	uint32_t handler_code[] = {
 		/* r15 points to the start of this code */
 		MIPS32_SW(8, MIPS32_FASTDATA_HANDLER_SIZE - 4, 15),
@@ -1127,14 +1131,14 @@ int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_are
 		/* start of fastdata area in t0 */
 		MIPS32_LUI(8, UPPER16(MIPS32_PRACC_FASTDATA_AREA)),
 		MIPS32_ORI(8, 8, LOWER16(MIPS32_PRACC_FASTDATA_AREA)),
-		MIPS32_LW(9, 0, 8),						/* start addr in t1 */
-		MIPS32_LW(10, 0, 8),						/* end addr to t2 */
-					/* loop: */
+		MIPS32_LW(9, 0, 8),				/* start addr in t1 */
+		MIPS32_LW(10, 0, 8),			/* end addr to t2 */
+		/* loop: */
 		write_t ? MIPS32_LW(11, 0, 8) : MIPS32_LW(11, 0, 9),	/* from xfer area : from memory */
 		write_t ? MIPS32_SW(11, 0, 9) : MIPS32_SW(11, 0, 8),	/* to memory      : to xfer area */
 
-		MIPS32_BNE(10, 9, NEG16(3)),			/* bne $t2,t1,loop */
-		MIPS32_ADDI(9, 9, 4),					/* addi t1,t1,4 */
+		MIPS32_BNE(10, 9, NEG16(3)),	/* bne $t2,t1,loop */
+		MIPS32_ADDI(9, 9, 4),			/* addi t1,t1,4 */
 
 		MIPS32_LW(8, MIPS32_FASTDATA_HANDLER_SIZE - 4, 15),
 		MIPS32_LW(9, MIPS32_FASTDATA_HANDLER_SIZE - 8, 15),
@@ -1143,14 +1147,14 @@ int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_are
 
 		MIPS32_LUI(15, UPPER16(MIPS32_PRACC_TEXT)),
 		MIPS32_ORI(15, 15, LOWER16(MIPS32_PRACC_TEXT)),
-		MIPS32_JR(15),								/* jr start */
-		MIPS32_MFC0(15, 31, 0),						/* move COP0 DeSave to $15 */
+		MIPS32_JR(15),					/* jr start */
+		MIPS32_MFC0(15, 31, 0),			/* move COP0 DeSave to $15 */
 	};
 
 	if (source->size < MIPS32_FASTDATA_HANDLER_SIZE)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
-		/* write program into RAM */
+	/* write program into RAM */
 	if (write_t != ejtag_info->fast_access_save) {
 		mips32_pracc_write_mem(ejtag_info, source->address, 4, ARRAY_SIZE(handler_code), handler_code);
 		/* save previous operation to speed to any consecutive read/writes */
@@ -1168,7 +1172,7 @@ int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_are
 
 	/* execute jump code, with no address check */
 	for (unsigned i = 0; i < ARRAY_SIZE(jmp_code); i++) {
-		int retval = wait_for_pracc_rw(ejtag_info);
+		retval = wait_for_pracc_rw(ejtag_info);
 		if (retval != ERROR_OK)
 			return retval;
 
@@ -1181,42 +1185,99 @@ int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_are
 		mips_ejtag_drscan_32_out(ejtag_info, ejtag_ctrl);
 	}
 
-	/* wait PrAcc pending bit for FASTDATA write, read address */
-	int retval = mips32_pracc_read_ctrl_addr(ejtag_info);
-	if (retval != ERROR_OK)
-		return retval;
+	while(1) {
+		/* wait PrAcc pending bit for FASTDATA write, read address */
+		retval = mips32_pracc_read_ctrl_addr(ejtag_info);
+		if (retval != ERROR_OK)
+			return retval;
 
-	/* next fetch to dmseg should be in FASTDATA_AREA, check */
-	if (ejtag_info->pa_addr != MIPS32_PRACC_FASTDATA_AREA)
-		return ERROR_FAIL;
+		/* next fetch to dmseg should be in FASTDATA_AREA, check */
+		if (ejtag_info->pa_addr == MIPS32_PRACC_FASTDATA_AREA)
+			break;
 
-	/* Send the load start address */
-	uint32_t val = addr;
-	mips_ejtag_set_instr(ejtag_info, EJTAG_INST_FASTDATA);
-	mips_ejtag_fastdata_scan(ejtag_info, 1, &val);
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+		mips_ejtag_drscan_32_out(ejtag_info, MIPS32_NOP);
 
-	retval = wait_for_pracc_rw(ejtag_info);
-	if (retval != ERROR_OK)
-		return retval;
-
-	/* Send the load end address */
-	val = addr + (count - 1) * 4;
-	mips_ejtag_set_instr(ejtag_info, EJTAG_INST_FASTDATA);
-	mips_ejtag_fastdata_scan(ejtag_info, 1, &val);
-
-	unsigned num_clocks = 0;	/* like in legacy code */
-	if (ejtag_info->mode != 0)
-		num_clocks = ((uint64_t)(ejtag_info->scan_delay) * jtag_get_speed_khz() + 500000) / 1000000;
-
-	for (int i = 0; i < count; i++) {
-		jtag_add_clocks(num_clocks);
-		mips_ejtag_fastdata_scan(ejtag_info, write_t, buf++);
+		/* Clear the access pending bit (let the processor eat!) */
+		uint32_t ejtag_ctrl = ejtag_info->ejtag_ctrl & ~EJTAG_CTRL_PRACC;
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_CONTROL);
+		mips_ejtag_drscan_32_out(ejtag_info, ejtag_ctrl);
 	}
 
-	retval = jtag_execute_queue();
-	if (retval != ERROR_OK) {
-		LOG_ERROR("fastdata load failed");
-		return retval;
+	if (ejtag_info->ejtag_version > EJTAG_VERSION_25) {
+		/* Send the load start address */
+		val = addr;
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_FASTDATA);
+		mips_ejtag_fastdata_scan(ejtag_info, 1, &val);
+
+		retval = wait_for_pracc_rw(ejtag_info);
+		if (retval != ERROR_OK)
+			return retval;
+
+		/* Send the load end address */
+		val = addr + (count - 1) * 4;
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_FASTDATA);
+		mips_ejtag_fastdata_scan(ejtag_info, 1, &val);
+
+		unsigned num_clocks = 0;	/* like in legacy code */
+		if (ejtag_info->mode != 0)
+			num_clocks = ((uint64_t)(ejtag_info->scan_delay) * jtag_get_speed_khz() + 500000) / 1000000;
+
+		for (int i = 0; i < count; i++) {
+			jtag_add_clocks(num_clocks);
+			mips_ejtag_fastdata_scan(ejtag_info, write_t, buf++);
+		}
+
+		retval = jtag_execute_queue();
+		if (retval != ERROR_OK) {
+			LOG_ERROR("fastdata load failed");
+			return retval;
+		}
+	} else {
+		ack_ctrl = malloc((count + 2) * sizeof(uint32_t));
+		if (ack_ctrl == NULL) {
+			LOG_ERROR("Out of memory");
+			return ERROR_FAIL;
+		}
+		req_ctrl = ejtag_info->ejtag_ctrl & ~EJTAG_CTRL_PRACC;
+
+		val = addr; /* Send the load start address */
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+		mips_ejtag_add_drscan_32(ejtag_info, val, NULL);
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_CONTROL);
+		mips_ejtag_add_drscan_32(ejtag_info, req_ctrl, ack_ctrl);
+
+		val = addr + (count - 1) * 4;	/* Send the load end address */
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+		mips_ejtag_add_drscan_32(ejtag_info, val, NULL);
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_CONTROL);
+		mips_ejtag_add_drscan_32(ejtag_info, req_ctrl, ack_ctrl + 1);
+
+		/* from xfer area to memory */
+		/* from memory to xfer area */
+		for (int i = 0; i < count; i++) {
+			mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+			mips_ejtag_add_drscan_32(ejtag_info, *buf, write_t ? NULL : buf);
+			mips_ejtag_set_instr(ejtag_info, EJTAG_INST_CONTROL);
+			mips_ejtag_add_drscan_32(ejtag_info, req_ctrl, ack_ctrl + 2 + i);
+			buf++;
+		}
+
+		retval = jtag_execute_queue();	/* execute queued scans */
+		if (retval != ERROR_OK) {
+			LOG_ERROR("fastdata load execute queue failed");
+			return retval;
+		}
+
+		if (debug_level >= LOG_LVL_DEBUG) {	
+			for (int i = 0; i < count + 2; i++) {
+				if ((ack_ctrl[i] & EJTAG_CTRL_PRACC) == 0) {
+					LOG_DEBUG("fastdata load verify failed");
+					return ERROR_FAIL;
+				}
+			}
+		}
+		free(ack_ctrl);
 	}
 
 	retval = mips32_pracc_read_ctrl_addr(ejtag_info);
