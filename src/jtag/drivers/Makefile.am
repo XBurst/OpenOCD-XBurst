@@ -144,6 +144,9 @@ endif
 if BCM2835GPIO
 DRIVERFILES += %D%/bcm2835gpio.c
 endif
+if X1000
+DRIVERFILES += %D%/x1000.c
+endif
 
 if OPENJTAG
 DRIVERFILES += %D%/openjtag.c
