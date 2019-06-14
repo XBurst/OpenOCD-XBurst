@@ -69,6 +69,7 @@
 #endif
 
 #include <helper/time_support.h>
+#include <sys/stat.h>
 
 #include "mips32.h"
 #include "mips32_pracc.h"
@@ -1355,3 +1356,119 @@ int mips32_pracc_fastdata_xfer(struct mips_ejtag *ejtag_info, struct working_are
 
 	return retval;
 }
+
+int mips32_pracc_fast_exec(struct mips_ejtag *ejtag_info, uint32_t start_addr, const char *exec_f, const char *data_f, const char *arg_l) {
+	int retval = ERROR_OK;
+	int ret;
+	FILE *exec_p = fopen(exec_f, "r");
+	FILE *data_p = fopen(data_f, "r");
+	uint32_t exec_d, data_d;
+	struct stat exec_stat, data_stat;
+	uint32_t *buf = NULL;
+	uint32_t req_ctrl;
+	uint32_t block_size = 4 * 1024 * 1024, count = 0;
+	bool data_finish = false, arg_finish = false;
+	uint32_t arg_num = 2;
+
+	stat(exec_f, &exec_stat);
+	stat(data_f, &data_stat);
+
+	buf = malloc(exec_stat.st_size);
+	while(1) {
+		ret = fread(&exec_d, 1, 4, exec_p);
+		if (ret == EOF)
+			break;
+		if (ret != 4) {
+			retval = ERROR_FAIL;
+			free(buf);
+			goto exit;
+		} else {
+			*buf = exec_d;
+			buf++;
+		}
+	}
+
+	/* write program into RAM */
+	mips32_pracc_write_mem(ejtag_info, start_addr, 4, exec_stat.st_size/4, buf);
+	free(buf);
+
+	uint32_t jmp_code[] = {
+		MIPS32_LUI(15, UPPER16(start_addr)),				/* load addr of jump in $15 */
+		MIPS32_ORI(15, 15, LOWER16(start_addr)),
+		MIPS32_JR(15),										/* jump to ram program */
+		MIPS32_NOP,
+	};
+	/* execute jump code, with no address check */
+	for (uint32_t i = 0; i < ARRAY_SIZE(jmp_code); i++) {
+		retval = wait_for_pracc_rw(ejtag_info);
+		if (retval != ERROR_OK)
+			goto exit;
+
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+		mips_ejtag_drscan_32_out(ejtag_info, jmp_code[i]);
+
+		/* Clear the access pending bit (let the processor eat!) */
+		mips32_pracc_finish(ejtag_info);
+	}
+
+	/* next fetch to dmseg should be in FASTDATA_AREA, check */
+	while(1) {
+		retval = mips32_pracc_read_ctrl_addr(ejtag_info);
+		if (retval != ERROR_OK)
+			return retval;
+		if (ejtag_info->pa_addr == MIPS32_PRACC_FASTDATA_AREA)
+			break;
+		mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+		mips_ejtag_drscan_32_out(ejtag_info, MIPS32_NOP);
+
+		/* Clear the access pending bit (let the processor eat!) */
+		mips32_pracc_finish(ejtag_info);
+	}
+
+	/* send data*/
+	buf = malloc(block_size);
+	while(1) {
+		if (arg_finish) {	
+			ret = fread(&data_d, 1, 4, data_p);
+			data_finish = ret == EOF;
+		} else {
+			buf[0] = 0;                  // flash type
+			buf[1] = data_stat.st_size;  // data size(byte)
+			count = arg_num;
+		}
+		if ((count == block_size) || (data_finish && (count > 0)) || !arg_finish) {
+			req_ctrl = ejtag_info->ejtag_ctrl & ~EJTAG_CTRL_PRACC;
+			for (uint32_t i = 0; i < count; i++) {
+				mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+				mips_ejtag_add_drscan_32(ejtag_info, *buf, NULL);
+				mips_ejtag_set_instr(ejtag_info, EJTAG_INST_CONTROL);
+				mips_ejtag_add_drscan_32(ejtag_info, req_ctrl, NULL);
+				buf++;
+			}
+			count = 0;
+			arg_finish = true;
+			retval = jtag_execute_queue();/* execute queued scans */
+			if (retval != ERROR_OK) {
+				LOG_ERROR("fastdata load execute queue failed");
+				break;
+			}
+		} else {
+			*(buf + count) = data_d;
+			count++;
+		}
+		if (data_finish)
+			break;
+	}
+	free(buf);
+
+	retval = mips32_pracc_read_ctrl_addr(ejtag_info);
+	if (ejtag_info->pa_addr != MIPS32_PRACC_TEXT)
+		LOG_ERROR("mini program did not return to start");
+
+exit:
+	fclose(data_p);
+	fclose(exec_p);
+
+	return retval;
+}
+

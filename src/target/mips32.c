@@ -28,6 +28,7 @@
 #include "config.h"
 #endif
 
+#include "image.h"
 #include "mips32.h"
 #include "breakpoints.h"
 #include "algorithm.h"
@@ -1158,6 +1159,88 @@ COMMAND_HANDLER(mips32_handle_invalidate_cache_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(mips32_handle_queue_exec)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	struct mips32_common *mips32 = target_to_mips32(target);
+	struct mips_ejtag *ejtag_info = &mips32->ejtag_info;
+	uint8_t *buffer = NULL;
+	size_t buf_cnt;
+	uint32_t image_size = 0;
+	struct image image;
+	int retval = ERROR_OK;
+	uint32_t instr;
+	uint32_t length = 0;
+
+	if (CMD_ARGC != 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	image.base_address_set = 0;
+	image.start_address_set = 0;
+
+	if (image_open(&image, CMD_ARGV[0], CMD_ARGV[1]) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (image.num_sections > 1) {
+		LOG_DEBUG("Can not support section num:%d", image.num_sections);
+		return ERROR_FAIL;
+	}
+	buffer = malloc(image.sections[0].size);
+	if (buffer == NULL) {
+		command_print(CMD_CTX, "error allocating buffer for section (%d bytes)", (int)(image.sections[0].size));
+		return ERROR_FAIL;
+	}
+	for (int i = 0; i < image.num_sections; i++) {
+		retval = image_read_section(&image, i, 0x0, image.sections[i].size, buffer, &buf_cnt);
+		if (retval != ERROR_OK) {
+			goto exit;
+		}
+		length = buf_cnt;
+		if (image.sections[i].base_address != 0xff200000) {
+			LOG_DEBUG("Can not support base_address:0x%08x", (uint32_t)image.sections[i].base_address);
+			retval = ERROR_FAIL;
+			goto exit;
+		}
+		if (length < 0x200) {
+			LOG_DEBUG("length < 0x200");
+			retval = ERROR_FAIL;
+			goto exit;
+		}
+		image_size += length;
+	}
+
+	struct pracc_queue_info ctx;
+	pracc_queue_init(&ctx);
+	for (uint32_t j = 0x200; j < length; j = j + 4) {
+		instr = (buffer[j + 3] << 24) | (buffer[j + 2] << 16) | (buffer[j + 1] << 8) | (buffer[j]);
+		pracc_add(&ctx, 0, instr);
+	}
+	mips32_pracc_queue_exec(ejtag_info, &ctx, NULL);
+	pracc_queue_free(&ctx);
+
+exit:
+	image_close(&image);
+	free(buffer);
+	return retval;
+}
+
+COMMAND_HANDLER(mips32_handle_fast_exec)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	struct mips32_common *mips32 = target_to_mips32(target);
+	struct mips_ejtag *ejtag_info = &mips32->ejtag_info;
+	int retval = ERROR_OK;
+	uint32_t start_addr;
+
+	if (CMD_ARGC < 4)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], start_addr);
+	retval = mips32_pracc_fast_exec(ejtag_info, start_addr, CMD_ARGV[1], CMD_ARGV[2], CMD_ARGV[3]);
+
+	return retval;
+}
+
 static const struct command_registration mips32_exec_command_handlers[] = {
 	{
 		.name = "cp0",
@@ -1179,6 +1262,20 @@ static const struct command_registration mips32_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "Invalidate either or both the instruction and data caches.",
 		.usage = "instnowb|data|datanowb|l2|l2nowb|all|allnowb",
+	},
+	{
+		.name = "queue_exec",
+		.handler = mips32_handle_queue_exec,
+		.mode = COMMAND_EXEC,
+		.help = "Execute the executable program in the debug mode.",
+		.usage = "[file_name] [bin|elf|ihex|s19]",
+	},
+	{
+		.name = "fast_exec",
+		.handler = mips32_handle_fast_exec,
+		.mode = COMMAND_EXEC,
+		.help = "Execute the executable program in the debug mode.",
+		.usage = "[file_name] [bin|elf|ihex|s19]",
 	},
 	COMMAND_REGISTRATION_DONE
 };

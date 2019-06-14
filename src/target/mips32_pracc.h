@@ -65,6 +65,8 @@ void pracc_add_li32(struct pracc_queue_info *ctx, uint32_t reg_num, uint32_t dat
 void pracc_queue_free(struct pracc_queue_info *ctx);
 int mips32_pracc_queue_exec(struct mips_ejtag *ejtag_info,
 			    struct pracc_queue_info *ctx, uint32_t *buf);
+int mips32_pracc_fast_exec(struct mips_ejtag *ejtag_info, uint32_t start_addr,
+				const char *exec_f, const char *data_f, const char *arg_l);
 
 int mips32_pracc_read_mem(struct mips_ejtag *ejtag_info,
 		uint32_t addr, int size, int count, void *buf);
