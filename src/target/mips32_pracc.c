@@ -176,29 +176,22 @@ int mips32_pracc_exec(struct mips_ejtag *ejtag_info, struct pracc_queue_info *ct
 {
 	int code_count = 0;
 	int store_pending = 0;		/* increases with every store instruction at dmseg, decreases with every store pa */
+	uint32_t abandoned_count = 0;
 	uint32_t wait_dret_count = 0;
 	uint32_t max_store_addr = 0;	/* for store pa address testing */
-	bool restart = 0;		/* restarting control */
-	int restart_count = 0;
 	uint32_t instr = 0;
 	bool final_check = 0;		/* set to 1 if in final checks after function code shifted out */
-	bool pass = 0;			/* to check the pass through pracc text after function code sent */
+	int index = 0;
 	int retval;
 
-	while (1) {
-		if (restart) {
-			if (restart_count < 3) {					/* max 3 restarts allowed */
-				retval = mips32_pracc_clean_text_jump(ejtag_info);
-				if (retval != ERROR_OK)
-					return retval;
-			} else
-				return ERROR_JTAG_DEVICE_ERROR;
-			restart_count++;
-			restart = 0;
-			code_count = 0;
-			LOG_DEBUG("restarting code");
-		}
+	mips32_pracc_read_ctrl_addr(ejtag_info);
+	if (ejtag_info->pa_addr != MIPS32_PRACC_TEXT) { /* restart */
+		retval = mips32_pracc_clean_text_jump(ejtag_info);		
+		if (retval != ERROR_OK)
+			return retval;
+	}
 
+	while (1) {
 		retval = mips32_pracc_read_ctrl_addr(ejtag_info);		/* update current pa info: control and address */
 		if (retval != ERROR_OK)
 			return retval;
@@ -208,15 +201,10 @@ int mips32_pracc_exec(struct mips_ejtag *ejtag_info, struct pracc_queue_info *ct
 			/* Check for pending store from a previous store instruction at dmseg */
 			if (store_pending == 0) {
 				LOG_DEBUG("unexpected write at address %" PRIx32, ejtag_info->pa_addr);
-				if (code_count < 2) {	/* allow for restart */
-					restart = 1;
-					continue;
-				} else
-					return ERROR_JTAG_DEVICE_ERROR;
+				return ERROR_JTAG_DEVICE_ERROR;
 			} else {
 				/* check address */
 				if (ejtag_info->pa_addr < MIPS32_PRACC_PARAM_OUT || ejtag_info->pa_addr > max_store_addr) {
-
 					LOG_DEBUG("writing at unexpected address %" PRIx32, ejtag_info->pa_addr);
 					return ERROR_JTAG_DEVICE_ERROR;
 				}
@@ -231,71 +219,56 @@ int mips32_pracc_exec(struct mips_ejtag *ejtag_info, struct pracc_queue_info *ct
 			/* store data at param out, address based offset */
 			param_out[(ejtag_info->pa_addr - MIPS32_PRACC_PARAM_OUT) / 4] = data;
 			store_pending--;
-
 		} else {					/* read/fetch access */
-			 if (!final_check) {			/* executing function code */
+			if ((code_count != 0) && (ejtag_info->pa_addr == MIPS32_PRACC_TEXT) && (final_check == 0)) {
+				final_check = 1;
+				code_count = 0;
+			}
+			if (!final_check) {			/* executing function code */
 				/* check address */
-				if (ejtag_info->pa_addr != (MIPS32_PRACC_TEXT + code_count * 4)) {
+				index = (ejtag_info->pa_addr - MIPS32_PRACC_TEXT) / 4;
+				if ((code_count == 0) && (ejtag_info->pa_addr != MIPS32_PRACC_TEXT)) {
 					LOG_DEBUG("reading at unexpected address %" PRIx32 ", expected %x",
-							ejtag_info->pa_addr, MIPS32_PRACC_TEXT + code_count * 4);
-
-					/* restart code execution only in some cases */
-					if (code_count == 1 && ejtag_info->pa_addr == MIPS32_PRACC_TEXT && restart_count == 0) {
-						LOG_DEBUG("restarting, without clean jump");
-						restart_count++;
-						code_count = 0;
-						continue;
-					} else if (code_count < 2) {
-						restart = 1;
-						continue;
-					}
+							ejtag_info->pa_addr, MIPS32_PRACC_TEXT);
 					return ERROR_JTAG_DEVICE_ERROR;
 				}
-				/* check for store instruction at dmseg */
-				uint32_t store_addr = ctx->pracc_list[code_count].addr;
-				if (store_addr != 0) {
-					if (store_addr > max_store_addr)
-						max_store_addr = store_addr;
-					store_pending++;
+				if (index < ctx->code_count) {
+					instr = ctx->pracc_list[index].instr;
+					/* check for store instruction at dmseg */
+					uint32_t store_addr = ctx->pracc_list[index].addr;
+					if (store_addr != 0) {
+						if (store_addr > max_store_addr)
+							max_store_addr = store_addr;
+						store_pending++;
+					}
+				} else { /* for fix LSU store delay */
+					instr = MIPS32_NOP;
+					abandoned_count++;
 				}
-
-				instr = ctx->pracc_list[code_count++].instr;
-				if (code_count == ctx->code_count)	/* last instruction, start final check */
-					final_check = 1;
-
-			 } else {	/* final check after function code shifted out */
-					/* check address */
-				if (ejtag_info->pa_addr == MIPS32_PRACC_TEXT) {
-					if (!pass) {	/* first pass through pracc text */
-						if (store_pending == 0)		/* done, normal exit */
-							return ERROR_OK;
-						pass = 1;		/* pracc text passed */
-						code_count = 0;		/* restart code count */
-					} else {
-						LOG_DEBUG("unexpected second pass through pracc text");
-						return ERROR_JTAG_DEVICE_ERROR;
-					}
-				} else {
-					if (ejtag_info->pa_addr != (MIPS32_PRACC_TEXT + code_count * 4)) {
-						LOG_DEBUG("unexpected read address in final check: %" PRIx32 ", expected: %x",
-							  ejtag_info->pa_addr, MIPS32_PRACC_TEXT + code_count * 4);
-						return ERROR_JTAG_DEVICE_ERROR;
-					}
-				}
-				if (!pass) {
-					if ((code_count - ctx->code_count) > 1) {	 /* allow max 2 instruction delay slot */
-						LOG_DEBUG("failed to jump back to pracc text");
-						return ERROR_JTAG_DEVICE_ERROR;
-					}
-				} else
-					if (code_count > 10) {		/* enough, abandone */
-						LOG_DEBUG("execution abandoned, store pending: %d", store_pending);
-						return ERROR_JTAG_DEVICE_ERROR;
-					}
-				instr = MIPS32_NOP;	/* shift out NOPs instructions */
 				code_count++;
-			 }
-
+			} else {	/* final check after function code shifted out */
+				if (store_pending == 0) {
+					if (ejtag_info->pa_addr != MIPS32_PRACC_TEXT) {
+						instr = MIPS32_B(NEG16(code_count + 1));
+						do {
+							mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
+							mips_ejtag_drscan_32_out(ejtag_info, instr);
+							mips32_pracc_finish(ejtag_info);
+							instr = MIPS32_NOP;
+							mips32_pracc_read_ctrl_addr(ejtag_info);
+						} while (ejtag_info->pa_addr != MIPS32_PRACC_TEXT);
+					}
+					return ERROR_OK;
+				} else { /* for fix LSU store delay */
+					instr = MIPS32_NOP;
+					abandoned_count++;
+					code_count++;
+				}
+			}
+			if (abandoned_count > 256) {
+				LOG_DEBUG("execution abandoned, store pending: %d", store_pending);
+				return ERROR_JTAG_DEVICE_ERROR;
+			}
 			/* Send instruction out */
 			mips_ejtag_set_instr(ejtag_info, EJTAG_INST_DATA);
 			mips_ejtag_drscan_32_out(ejtag_info, instr);
