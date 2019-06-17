@@ -246,6 +246,10 @@ int mips32_pracc_exec(struct mips_ejtag *ejtag_info, struct pracc_queue_info *ct
 					abandoned_count++;
 				}
 				code_count++;
+				if (code_count > PRACC_MAX_EXEC_CODE_COUNT) {
+					LOG_DEBUG("max exec code count is %d", PRACC_MAX_EXEC_CODE_COUNT);
+					return ERROR_JTAG_DEVICE_ERROR;
+				}
 			} else {	/* final check after function code shifted out */
 				if (store_pending == 0) {
 					if (ejtag_info->pa_addr != MIPS32_PRACC_TEXT) {
